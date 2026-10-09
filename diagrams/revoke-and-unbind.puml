@@ -15,7 +15,7 @@ B -> B: the next lease or renewal under that chain → grant_revoked
 
 == the task ends ==
 D -> B: unbind {binding_id}
-B -> B: end the binding's leases; close uid 612's connections
+B -> B: end the binding's leases; close uid 30412's connections
 D -> H: helper-op/1 {op: user.retire, generation: g-0193}
 H -> H: state retiring: launcher refuses g-0193;\nstop processes, verify quiescence; (v1: egress stays denied)
 H -> H: quarantine and archive or delete the home;\nremove account and group; state removed

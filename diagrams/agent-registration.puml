@@ -3,7 +3,7 @@
 title Registering and starting an agent: OS account, binding with an agent-generation grant, start through the launcher
 
 participant "Orchestrator" as O
-participant "curator-dispatcher\n(service account cur-s-dispatch)" as D
+participant "curator-dispatcher\n(service account swarma-dispatch)" as D
 participant "curator-host-helper\n(root, closed op schema)" as H
 participant "Broker" as B
 participant "curator-host-launcher\n(root, closed launch schema)" as L
@@ -13,15 +13,15 @@ O -> D: start a worker: profile dev, accounts, until end of task
 D -> D: check O may start it; allocate request_id
 D -> H: sudo helper  (stdin: user.create {kind: agent, label: dev-7f3, request_id})
 H -> H: under the helper lock: allocate UID, ledger entry g-0193 (creating → active)
-H --> D: {username: cur-a-dev-7f3, uid: 612, generation: g-0193}
+H --> D: {username: swa-dev-7f3, uid: 30412, generation: g-0193}
 D -> D: sign leaf grant: subject agent:g-0193, depth 0,\nnarrowed from its own grant (chain to the root)
-D -> B: bind {uid 612, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root], request_id, expires_at}
-B -> B: peer is a dispatcher principal;\nledger: g-0193 active, kind agent, created by this dispatcher;\nverify every chain edge incl. the leaf; revocation state readable
+D -> B: bind {uid 30412, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root],\ncaller {chain [caller grant, …, root], intersection}, request_id, expires_at}
+B -> B: peer is a dispatcher principal;\nledger: g-0193 active, kind agent, created by this dispatcher;\nverify both chains, every edge incl. the leaf;\nleaf within the caller intersection; revocation state readable
 B --> D: binding/1 {binding_id}
 D -> D: close the broker connection
 D -> L: sudo launcher  (stdin: launch.start {generation g-0193, executor, plan, request_id})
-L -> L: ledger: g-0193 active; executor digest approved;\nclose inherited descriptors; clear groups; drop to uid 612
-L -> E: exec the executor as uid 612 (sanitised environment)
+L -> L: ledger: g-0193 active; executor digest approved;\nclose inherited descriptors; clear groups; drop to uid 30412
+L -> E: exec the executor as uid 30412 (sanitised environment)
 E -> B: fresh connection (lease flow: lease-at-launch)
 D --> O: run handle (pid, generation, binding_id)
 @enduml

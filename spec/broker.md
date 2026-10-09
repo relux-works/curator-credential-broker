@@ -1,8 +1,14 @@
 # curator-credential-broker: specification
 
-- **Status:** draft v0.2 (2026-10-09). Nothing is implemented.
+- **Status:** draft v0.3 (2026-10-10). Nothing is implemented.
 - **Normative language:** MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 - **Companions:** [curator-host-helper](https://github.com/relux-works/curator-host-helper) (per-agent OS users, the launcher that starts processes under them, and per-UID firewall rules), [curator-network-profiles](https://github.com/relux-works/curator-network-profiles) (egress profiles), curator-spec CIP-0010 and CIP-0011 (the Curator side: credential sources, the protected credential binding, the executor capability, the launch-plan extension).
+
+### Revision 0.3
+
+- A binding carries the **caller's authorization** as a dependency: the chain of the caller who asked the dispatcher for the agent, and the exact intersection granted. The broker verifies it at bind and on every lease and renewal, so revoking a caller cuts its agents at once (owner decision 2026-10-10; dispatcher review F2) (§7.1, §8.2).
+- The action vocabulary is frozen for v0 (`credential.lease`, `agent.spawn`), and the dispatcher's chain has a constructible shape (§6.2).
+- Paths and names follow the platform root `/opt/swarma` and the service account `swarma-broker`; the dispatcher is relux-works/curator-dispatcher (§15, §16).
 
 ### Revision 0.2
 
@@ -58,7 +64,7 @@ The broker is a small service that:
 
 | Component | Runs as | Job |
 |---|---|---|
-| broker daemon | its own unprivileged service user (`cur-s-broker` by default) | listens on the broker socket; keeps accounts, grants, revocations, bindings and leases; runs auth owners; writes the audit log |
+| broker daemon | its own unprivileged service user (`swarma-broker` by default) | listens on the broker socket; keeps accounts, grants, revocations, bindings and leases; runs auth owners; writes the audit log |
 | account store | files owned by the broker user | account records and their secret material (§5.3) |
 | grant store | files owned by the broker user | signed grants and the revocation state (§6.4) |
 | auth owners | inside the daemon, one per rotating account | refresh (§9) |
@@ -192,7 +198,8 @@ A request carries the full chain as envelopes, leaf first. The broker accepts it
 3. For **every** adjacent pair `(child, parent)`, starting with the leaf and its parent: `child.parent == parent.id`; `child.issuer == parent.subject`, which therefore must be a key; and the child narrows the parent (`grant_chain_broken`, `grant_not_narrowing`).
 4. The last envelope is the root: `parent` is null and its `issuer` is a configured root key (`grant_root_unknown`).
 5. Narrowing means: actions, accounts, harnesses and profiles are subsets of the parent's; `[not_before, expires_at]` lies within the parent's window; `child.depth < parent.depth`.
-6. Only the leaf may have an `agent:` subject, and a leaf with an `agent:` subject has `depth: 0` (`grant_subject_invalid`). Role subjects, wildcards and other conditions are not part of v0 and refuse (`grant_unsupported`).
+6. Only the leaf may have an `agent:` subject, and a leaf with an `agent:` subject has `depth: 0` and the single action `credential.lease` (`grant_subject_invalid`). The v0 action vocabulary is `credential.lease` and `agent.spawn`; role subjects, wildcards, other actions and other conditions are not part of v0 and refuse (`grant_unsupported`).
+8. A dispatcher's own chain ends at the dispatcher key with depth ≥ 1 and is at most 3 envelopes long, so that an agent leaf fits within the 4-envelope bound; the broker refuses to configure a dispatcher whose chain cannot construct a leaf (`grant_unconstructible`).
 7. No envelope, issuer key or subject key is revoked (§6.4), and the current time is inside every window (`grant_revoked`, `grant_expired`, `grant_not_yet_valid`).
 
 The verifier's test suite includes a valid chain and mutants that skip each rule, including one that skips only the leaf edge.
@@ -239,6 +246,8 @@ binding/1
   label:        "dev-7f3",                // for people; not used for authorisation
   profiles:     ["dev"],
   chain:        [leaf id, …, root id],    // leaf subject = "agent:g-0193"
+  caller:       { chain: [caller leaf id, …, root id],   // the authorization of whoever asked for the agent
+                  intersection: { accounts, harnesses, profiles, not_before, expires_at } },
   created_by:   principal reference of the dispatcher,
   request_id:   the dispatcher's request id (for reconciliation),
   created_at, expires_at,
@@ -248,6 +257,7 @@ binding/1
 ### 7.2 Creating and removing
 
 - `bind` MUST come from a dispatcher principal (§4.2) and MUST name a UID whose ledger entry is an active **agent** account of that generation, created by the same dispatcher (or by an operator). The chain MUST verify (§6.2) with leaf subject `agent:<generation>`.
+- The `caller.chain` MUST verify separately (§6.2): its leaf subject is the caller's key, it allows `agent.spawn` and `credential.lease`, and the binding's leaf MUST lie within `caller.intersection`, which MUST lie within the caller chain. The two chains are never concatenated.
 - A bind with a `request_id` already used by the same dispatcher returns the existing binding if the arguments are equal and refuses otherwise (`bind_request_conflict`).
 - `unbind` comes from the dispatcher that created the binding or from an operator. It ends the binding's leases and closes the UID's connections. Expired bindings are removed by the broker.
 - A UID with no active binding receives `lease_unbound` for every lease request.
@@ -281,7 +291,7 @@ lease.request/1
 ### 8.2 Checks, in order
 
 1. The peer is the agent principal of an active binding (`lease_unbound`, `principal_ledger_mismatch`).
-2. The binding's chain verifies now against the current revocation state (§6.2, §6.4).
+2. The binding's chain **and** its caller chain verify now against the current revocation state (§6.2, §6.4); a revoked envelope or key in either refuses (`lease_grant_revoked`, `lease_caller_revoked`).
 3. The leaf covers `credential.lease` on the account, the harness and the profile, and the profile is one of the binding's profiles (`lease_not_authorised`).
 4. The account exists, its harness equals the requested harness, and it is `active` (`lease_account_unknown`, `lease_harness_mismatch`, `lease_account_revoked`, `lease_reauth_required`, `lease_owner_unavailable`).
 5. The channel is valid for the kind (`lease_channel_unsupported`), and the harness release is qualified for this kind and channel (`lease_harness_unqualified`).
@@ -321,7 +331,7 @@ Conflicting sources are refused, never replaced (§12.2). There is no channel th
 ### 8.5 Renewal, release and reports
 
 - `lease.renew`, `lease.release` and `event.report` name a `lease_id` and are accepted only from the lease's own `(uid, generation, binding_id)` (`lease_not_owner`).
-- Renewal is refused after `authorized_until` or once the lease is released, expired or revoked. It repeats checks 1 to 7 before releasing new material, including after an asynchronous refresh (§9).
+- Renewal is refused after `authorized_until` or once the lease is released, expired or revoked. It repeats checks 1 to 7, including the caller chain, before releasing new material, including after an asynchronous refresh (§9).
 - Release is idempotent and ends renewal.
 - A report affects only the reporting lease's record. A client report never changes an account's state; account states change by the owner's command or by the auth owner's own refresh results (§9.4).
 - Leases are not tied to connections; a disconnected executor can renew from a new connection of the same principal.
@@ -452,14 +462,14 @@ Agent leaves (`agent:<generation>`) are issued by the dispatcher when it binds a
 
 ### 15.1 Service user
 
-The broker runs as a dedicated unprivileged service user created by curator-host-helper (`user.create { kind: "service" }` from the installer principal). The platform installer installs the binary, the service user and the service unit together.
+The broker runs as the dedicated unprivileged service user `swarma-broker`, created by curator-host-helper (`user.create { kind: "service" }` from the installer principal); its home is `/opt/swarma/services/swarma-broker`. The platform installer installs the binary, the service user and the service unit together.
 
 ### 15.2 Paths
 
 | What | macOS | Linux |
 |---|---|---|
 | data (store, grants, revocations, leases, config, audit) | the service user's home, 0700 | the service user's home, 0700 |
-| socket | a dedicated directory outside the data tree, owned by the broker user, mode 0755, whose every ancestor is root-owned and not writable by others; socket mode 0666 (authorisation is by peer principal, §4) | same |
+| socket | `/opt/swarma/run/broker/`, owned by the broker user, mode 0755, every ancestor root-owned and not writable by others; socket mode 0666 (authorisation is by peer principal, §4) | same |
 | service | a LaunchDaemon with `UserName` set to the broker user | a systemd system unit with `User=` |
 
 ### 15.3 Removal
@@ -469,7 +479,7 @@ Uninstall stops the service, ends leases and bindings, and leaves the store unle
 ## 16. Delivery order
 
 1. **Formats.** `grant/1`, `revocation/1` and the `broker/1` frames are frozen with canonical and negative vectors; the verifier ships with its mutant suite (§6.2).
-2. **Slice 0: one protected Claude launch.** curator-host-helper v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in Curator's first executor (CIP-0011). Acceptance on hosted runners only: a dispatcher stand-in creates an agent account, binds it and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
+2. **Slice 0: one protected Claude launch.** curator-host-helper v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in Curator's first executor (CIP-0011). Acceptance on hosted runners only, through curator-dispatcher v0 and `curator agent-user` with the deployed sudoers rules: the dispatcher creates an agent account, binds it with the caller's authorization and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
 3. **Slice 1: Codex.** The enrolment ceremony, the auth owner, external tokens with renewal and deadlines, and qualification on the supported Codex release (§9.6).
 4. **Slice 2: enforced networking.** Helper v1 firewall rules and trusted applied state; accounts that require enforced profiles become serviceable (§5.5).
 
@@ -490,7 +500,7 @@ Uninstall stops the service, ends leases and bindings, and leaves the store unle
 
 ## Appendix A. Refusal codes
 
-`peer_identity_unavailable`, `server_identity_mismatch`, `principal_ledger_mismatch`, `principal_identity_changed`, `role_not_permitted`, `frame_too_large`, `version_unsupported`, `request_deadline_exceeded`, `account_exists`, `account_unknown`, `account_duplicate`, `account_store_keyring_refused`, `enrol_material_invalid`, `grant_malformed`, `grant_id_mismatch`, `grant_signature_invalid`, `grant_chain_malformed`, `grant_chain_broken`, `grant_not_narrowing`, `grant_root_unknown`, `grant_subject_invalid`, `grant_unsupported`, `grant_revoked`, `grant_expired`, `grant_not_yet_valid`, `revocation_not_authorised`, `revocation_state_unavailable`, `bind_not_dispatcher`, `bind_target_invalid`, `bind_request_conflict`, `lease_unbound`, `lease_not_authorised`, `lease_account_unknown`, `lease_harness_mismatch`, `lease_account_revoked`, `lease_reauth_required`, `lease_owner_unavailable`, `lease_channel_unsupported`, `lease_harness_unqualified`, `lease_binding_mismatch`, `lease_network_mismatch`, `lease_network_enforcement_unavailable`, `lease_not_owner`, `lease_not_active`, `renew_not_current`, `renew_timeout`, `renew_failed`, `external_token_init_failed`, `credential_source_conflict`.
+`peer_identity_unavailable`, `server_identity_mismatch`, `principal_ledger_mismatch`, `principal_identity_changed`, `role_not_permitted`, `frame_too_large`, `version_unsupported`, `request_deadline_exceeded`, `account_exists`, `account_unknown`, `account_duplicate`, `account_store_keyring_refused`, `enrol_material_invalid`, `grant_malformed`, `grant_id_mismatch`, `grant_signature_invalid`, `grant_chain_malformed`, `grant_chain_broken`, `grant_not_narrowing`, `grant_root_unknown`, `grant_subject_invalid`, `grant_unsupported`, `grant_revoked`, `grant_expired`, `grant_not_yet_valid`, `revocation_not_authorised`, `revocation_state_unavailable`, `bind_not_dispatcher`, `bind_target_invalid`, `bind_request_conflict`, `lease_unbound`, `lease_not_authorised`, `lease_account_unknown`, `lease_harness_mismatch`, `lease_account_revoked`, `lease_reauth_required`, `lease_owner_unavailable`, `lease_channel_unsupported`, `lease_harness_unqualified`, `lease_binding_mismatch`, `lease_network_mismatch`, `lease_network_enforcement_unavailable`, `lease_not_owner`, `lease_not_active`, `lease_caller_revoked`, `grant_unconstructible`, `renew_not_current`, `renew_timeout`, `renew_failed`, `external_token_init_failed`, `credential_source_conflict`.
 
 ## Appendix B. Diagrams
 

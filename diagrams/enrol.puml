@@ -5,7 +5,7 @@ title Enrolment: a person enrols a subscription once, through the vendor's own f
 actor "Person (owner)" as P
 participant "claude CLI\n(vendor flow)" as V
 participant "curator broker enrol\n(CLI, as the person's OS account)" as C
-participant "Broker daemon\n(service user cur-s-broker)" as B
+participant "Broker daemon\n(service user swarma-broker)" as B
 participant "Approved Codex executable\n(pinned digest, run by the broker)" as X
 database "Secret store\n(0600 files, broker user)" as S
 

@@ -2,7 +2,7 @@
 !theme plain
 title A launch receives a lease: the executor resolves the protected binding; material goes only into the harness it starts
 
-participant "Executor\n(agent OS account, uid 612)" as E
+participant "Executor\n(agent OS account, uid 30412)" as E
 participant "curator-network-profiles\n(resolve, destination-local)" as N
 participant "Broker" as B
 participant "Harness\n(Claude Code)" as H
@@ -13,7 +13,7 @@ E -> N: resolve the network profile for Curator profile dev
 N --> E: record {profile_ref, profile_digest, assurance: cooperative}
 E -> B: connect; check the server's peer UID is the broker's
 E -> B: lease.request {harness, profile, account, channel: env,\ncredential_binding, network, launch_id}
-B -> B: under the state lock:\n1 peer = agent principal of an active binding (ledger g-0193 active)\n2 chain verifies against the current revocation state\n3 leaf covers account, harness, profile; profile in binding\n4 account active, harness matches\n5 channel valid; harness release qualified\n6 binding fields match; endpoint and executable approved\n7 network: cooperative match recorded as declared
+B -> B: under the state lock:\n1 peer = agent principal of an active binding (ledger g-0193 active)\n2 lease chain and caller chain verify against the current revocation state\n3 leaf covers account, harness, profile; profile in binding\n4 account active, harness matches\n5 channel valid; harness release qualified\n6 binding fields match; endpoint and executable approved\n7 network: cooperative match recorded as declared
 alt any check fails
   B --> E: refusal {code: lease_not_authorised | lease_binding_mismatch | …}
   E -> E: do not exec; report
