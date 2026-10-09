@@ -49,7 +49,7 @@ The broker is a small service that:
 | generation | The never-reused identifier that curator-host-helper assigns when it creates an OS account (its ledger, helper §3.4). |
 | grant | A signed statement that a key or an agent generation may lease named accounts for named harnesses and profiles in a time window (§6). |
 | binding | The broker's record that an agent OS account (UID and generation) currently acts as one agent, with the grant chain it uses (§7). |
-| dispatcher | The component that starts agents: it asks curator-host-helper for an OS account, binds it in the broker, and starts processes under it through the helper's launcher. Until a dispatcher exists, a Curator command plays this role (CIP-0011). |
+| dispatcher | relux-works/curator-dispatcher, running under its own service account: it asks curator-host-helper for an OS account, binds it in the broker, and starts processes under it through the helper's launcher. Curator's `agent-user` commands are its clients (CIP-0011). |
 | lease | One authorised use of an account's credential by one binding for one launch (§8). |
 | auth owner | The broker-side component that alone refreshes a rotating account (§9). |
 | executor | The final executor of a launch: the trusted process that runs under the agent's OS account, resolves the protected credential binding, requests the lease and execs the harness. |

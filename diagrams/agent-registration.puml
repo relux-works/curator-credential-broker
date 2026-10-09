@@ -3,7 +3,7 @@
 title Registering and starting an agent: OS account, binding with an agent-generation grant, start through the launcher
 
 participant "Orchestrator" as O
-participant "Dispatcher\n(v0: curator agent-user)" as D
+participant "curator-dispatcher\n(service account cur-s-dispatch)" as D
 participant "curator-host-helper\n(root, closed op schema)" as H
 participant "Broker" as B
 participant "curator-host-launcher\n(root, closed launch schema)" as L
