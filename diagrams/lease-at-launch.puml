@@ -1,24 +1,27 @@
 @startuml lease-at-launch
 !theme plain
-title A launch receives a lease: the material goes only into the harness process it starts
+title A launch receives a lease: the executor resolves the protected binding; material goes only into the harness it starts
 
-participant "Launcher / final executor\n(as agent OS user, uid 612)" as L
-participant "curator-network-profiles\n(resolve)" as N
+participant "Executor\n(agent OS account, uid 612)" as E
+participant "curator-network-profiles\n(resolve, destination-local)" as N
 participant "Broker" as B
 participant "Harness\n(Claude Code)" as H
 
-L -> N: resolve network profile for Curator profile dev
-N --> L: binding record {profile: egress-a, digest}
-L -> B: lease.request {harness: claude_code, profile: dev,\naccount: ivan/claude/personal, network: record, channel: env, launch_id}
-B -> B: 1 peer UID 612 bound, generation matches\n2 chain verifies now\n3 leaf covers credential.lease on the account, profile, harness\n4 account active\n5 account requires egress-a = record\n6 channel valid  7 conditions hold
+E -> E: resolve credential_binding/1 (CIP-0010 C3.4):\nprofile, harness, account, channel, endpoint,\nexecutable digest, policy generation
+E -> E: refuse if another credential source is present\n(credential_source_conflict)
+E -> N: resolve the network profile for Curator profile dev
+N --> E: record {profile_ref, profile_digest, assurance: cooperative}
+E -> B: connect; check the server's peer UID is the broker's
+E -> B: lease.request {harness, profile, account, channel: env,\ncredential_binding, network, launch_id}
+B -> B: under the state lock:\n1 peer = agent principal of an active binding (ledger g-0193 active)\n2 chain verifies against the current revocation state\n3 leaf covers account, harness, profile; profile in binding\n4 account active, harness matches\n5 channel valid; harness release qualified\n6 binding fields match; endpoint and executable approved\n7 network: cooperative match recorded as declared
 alt any check fails
-  B --> L: refusal {code: lease_network_mismatch | lease_not_authorised | …}
-  L -> L: do not exec; report
+  B --> E: refusal {code: lease_not_authorised | lease_binding_mismatch | …}
+  E -> E: do not exec; report
 else all checks pass
-  B --> L: lease/1 {lease_id, material, expires_at}
-  L -> L: refuse if another credential source is present\n(credential_source_conflict)
-  L -> H: exec with CLAUDE_CODE_OAUTH_TOKEN in the process environment only\n(not argv, not files, not MCP children)
-  H --> L: exit
-  L -> B: lease.release {lease_id}
+  B --> E: lease/1 {lease_id, payload, token_expires_at, authorized_until}
+  E -> E: re-check the binding tuple and conflicts
+  E -> H: exec with CLAUDE_CODE_OAUTH_TOKEN in the process environment only\n(not argv, not files, not logs)
+  H --> E: exit
+  E -> B: lease.release {lease_id} (idempotent)
 end
 @enduml

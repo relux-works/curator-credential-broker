@@ -1,21 +1,27 @@
 @startuml agent-registration
 !theme plain
-title Registering an agent: the dispatcher creates the OS user and binds it in the broker with a grant chain
+title Registering and starting an agent: OS account, binding with an agent-generation grant, start through the launcher
 
 participant "Orchestrator" as O
-participant "Dispatcher\n(v0: curator agent-user create)" as D
-participant "curator-host-helper\n(root, sudoers: this path only)" as H
-participant "Key keeper\n(later)" as K
+participant "Dispatcher\n(v0: curator agent-user)" as D
+participant "curator-host-helper\n(root, closed op schema)" as H
 participant "Broker" as B
+participant "curator-host-launcher\n(root, closed launch schema)" as L
+participant "Executor\n(agent OS account)" as E
 
-O -> D: start a worker: role R, profile dev,\nchild grant G_child (narrowed from my G_orch)
-D -> D: check: may O start role R?\nG_child ⊆ delegable(G_orch)?
-D -> H: sudo helper  (stdin: helper-op/1 {op: user.create, kind: agent, label: dev-7f3})
+O -> D: start a worker: profile dev, accounts, until end of task
+D -> D: check O may start it; allocate request_id
+D -> H: sudo helper  (stdin: user.create {kind: agent, label: dev-7f3, request_id})
+H -> H: under the helper lock: allocate UID, ledger entry g-0193 (creating → active)
 H --> D: {username: cur-a-dev-7f3, uid: 612, generation: g-0193}
-D -> K: register(612, derivation path)  (later)
-K --> D: agent public key (later; v0 uses label:dev-7f3)
-D -> B: bind {uid 612, generation g-0193, identity label:dev-7f3,\nprofiles [dev], chain [G_child, G_orch, …, root], expires_at: end of task}
-B -> B: peer UID is a configured dispatcher;\nverify chain: signatures, narrowing, expiry, revocation;\nleaf subject = binding identity
-B --> D: binding/1
-D --> O: run handle
+D -> D: sign leaf grant: subject agent:g-0193, depth 0,\nnarrowed from its own grant (chain to the root)
+D -> B: bind {uid 612, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root], request_id, expires_at}
+B -> B: peer is a dispatcher principal;\nledger: g-0193 active, kind agent, created by this dispatcher;\nverify every chain edge incl. the leaf; revocation state readable
+B --> D: binding/1 {binding_id}
+D -> D: close the broker connection
+D -> L: sudo launcher  (stdin: launch.start {generation g-0193, executor, plan, request_id})
+L -> L: ledger: g-0193 active; executor digest approved;\nclose inherited descriptors; clear groups; drop to uid 612
+L -> E: exec the executor as uid 612 (sanitised environment)
+E -> B: fresh connection (lease flow: lease-at-launch)
+D --> O: run handle (pid, generation, binding_id)
 @enduml

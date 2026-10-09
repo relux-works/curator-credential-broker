@@ -1,24 +1,32 @@
 @startuml codex-renewal
 !theme plain
-title Codex personal plan: one auth owner refreshes; launches use external tokens and renew without a restart
+title Codex personal plan: one auth owner refreshes; launches use external tokens and renew within a deadline
 
-participant "Codex app-server\n(agent OS user, no auth.json)" as A
-participant "Launcher\n(client of the app-server)" as L
-participant "Broker: auth owner\n(holds auth.json + lock)" as O
+participant "Codex app-server\n(agent OS account, no auth.json)" as A
+participant "Executor\n(client of the app-server)" as E
+participant "Broker: auth owner\n(broker-owned home + lock)" as O
 
-L -> O: lease.request {harness: codex_cli, channel: external-token, …}
-O -> O: token expires within 48 h? refresh once (one-shot codex app-server)
-O --> L: {access_token, chatgpt_account_id, expires_at}
-L -> A: initialize; account/login/start {type: chatgptAuthTokens, accessToken, chatgptAccountId}
+E -> O: lease.request {harness: codex_cli, channel: external-token, …}
+O -> O: token expires within 48 h? refresh once under the lock
+O --> E: payload {access_token, chatgpt_account_id, plan_type?}
+E -> A: initialize (experimental capability required for external tokens)
+E -> A: account/login/start {type: chatgptAuthTokens, accessToken, chatgptAccountId}
 ... turns ...
 A -> A: model call answers 401
-A -> L: account/chatgptAuthTokens/refresh
-L -> O: lease.renew {lease_id, rejected_sha256}
+A -> E: account/chatgptAuthTokens/refresh (answer expected within ~10 s)
+E -> O: lease.renew {lease_id, rejected_sha256} (deadline 8 s)
 alt rejected token is still current
   O -> O: refresh once under the lock (N rejected launches → 1 refresh)
 end
-O --> L: new access token
-L --> A: refresh answer {accessToken}
-A -> A: retry; the turn continues (no restart)
-note over O: the refresh token never leaves the auth owner
+alt renewed within the deadline
+  O --> E: payload {access_token, chatgpt_account_id}
+  E -> E: same chatgpt_account_id as the lease?
+  E --> A: refresh answer {accessToken, chatgptAccountId}
+  A -> A: retry the call
+else timeout or refusal
+  O --> E: renew_timeout | lease_reauth_required | …
+  E --> A: error answer (no late reply, no fallback login)
+  A -> A: the turn fails
+end
+note over O: the refresh token never leaves the broker's store
 @enduml

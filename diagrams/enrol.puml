@@ -3,24 +3,33 @@
 title Enrolment: a person enrols a subscription once, through the vendor's own flow; the material lands only in the broker's store
 
 actor "Person (owner)" as P
-participant "claude / codex CLI\n(vendor flow)" as V
-participant "curator broker enrol\n(CLI, as the person's OS user)" as C
+participant "claude CLI\n(vendor flow)" as V
+participant "curator broker enrol\n(CLI, as the person's OS account)" as C
 participant "Broker daemon\n(service user cur-s-broker)" as B
+participant "Approved Codex executable\n(pinned digest, run by the broker)" as X
 database "Secret store\n(0600 files, broker user)" as S
 
 == Claude subscription ==
 P -> V: claude setup-token (browser login)
 V --> P: one-year token (printed, not stored)
 P -> C: curator broker enrol claude_code --account ivan/claude/personal --token-stdin [--issued-at]
+C -> B: connect; check the server's peer UID is the broker's
 C -> B: hello; account.enrol {kind: claude-oauth-token, material}
-B -> B: peer UID from the kernel = owner UID
-B -> S: put(material)
+B -> B: peer principal from the kernel (pinned owner)
+B -> S: put(material) (atomic replace)
 B --> C: account/1 {state: active, expires_at: computed | null}
 
-== Codex personal plan ==
-P -> V: codex login (in the home the auth owner will own)
-P -> C: curator broker enrol codex_cli --account ivan/codex/personal --chatgpt
-C -> B: account.enrol {kind: codex-chatgpt, home handover}
-B -> B: refuse a keyring-backed store; take the exclusive lock on auth.json
+== Codex personal plan: enrolment ceremony ==
+P -> C: curator broker enrol codex_cli --account ivan/codex/personal
+C -> B: account.enrol {kind: codex-chatgpt}
+B -> B: create a fresh Codex home in the broker store\n(file credential storage, sanitised environment)
+B -> X: start the vendor's device login in that home
+X --> B: verification address + code
+B --> C: verification address + code
+C --> P: open the address, enter the code
+P -> P: completes the login in a browser
+X --> B: login stored in the broker-owned home
+B -> B: read the vendor account id;\nrefuse if another broker account maps to it (account_duplicate)
 B --> C: account/1 {state: active}; auth owner started
+note over B: no existing login is imported,\nno other home adopted, no keyring item exported
 @enduml
