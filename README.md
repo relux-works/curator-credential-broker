@@ -2,7 +2,7 @@
 
 A credential broker for agent systems. It runs under its own OS user, holds subscription and API credentials in its own store, and leases them to authorised agent launches over a Unix socket whose peer it identifies through the kernel (`getpeereid` / `SO_PEERCRED`).
 
-**Status: design in progress.** Nothing is implemented yet. The specification will live in `spec/`.
+**Status: design in progress.** Nothing is implemented yet. The specification is [`spec/broker.md`](spec/broker.md); diagrams are in [`diagrams/`](diagrams/).
 
 ## What it is for
 

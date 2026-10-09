@@ -1,0 +1,24 @@
+@startuml lease-at-launch
+!theme plain
+title A launch receives a lease: the material goes only into the harness process it starts
+
+participant "Launcher / final executor\n(as agent OS user, uid 612)" as L
+participant "curator-network-profiles\n(resolve)" as N
+participant "Broker" as B
+participant "Harness\n(Claude Code)" as H
+
+L -> N: resolve network profile for Curator profile dev
+N --> L: binding record {profile: egress-a, digest}
+L -> B: lease.request {harness: claude_code, profile: dev,\naccount: ivan/claude/personal, network: record, channel: env, launch_id}
+B -> B: 1 peer UID 612 bound, generation matches\n2 chain verifies now\n3 leaf covers credential.lease on the account, profile, harness\n4 account active\n5 account requires egress-a = record\n6 channel valid  7 conditions hold
+alt any check fails
+  B --> L: refusal {code: lease_network_mismatch | lease_not_authorised | …}
+  L -> L: do not exec; report
+else all checks pass
+  B --> L: lease/1 {lease_id, material, expires_at}
+  L -> L: refuse if another credential source is present\n(credential_source_conflict)
+  L -> H: exec with CLAUDE_CODE_OAUTH_TOKEN in the process environment only\n(not argv, not files, not MCP children)
+  H --> L: exit
+  L -> B: lease.release {lease_id}
+end
+@enduml

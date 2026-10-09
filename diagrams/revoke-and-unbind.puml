@@ -1,0 +1,25 @@
+@startuml revoke-and-unbind
+!theme plain
+title Ending access: grant revocation, task end, account revocation
+
+actor "Person / operator" as P
+participant "Dispatcher" as D
+participant "curator-host-helper" as H
+participant "Broker" as B
+
+== a grant is revoked ==
+P -> B: revocation.put {revokes: G_child, by: issuer, sig}
+B -> B: the next lease or renew under that chain → lease_grant_revoked
+
+== the task ends ==
+D -> B: unbind {uid 612}
+B -> B: release open leases of uid 612
+D -> H: helper-op/1 {op: user.remove, username: cur-a-dev-7f3}
+H --> D: removed (only accounts the helper created)
+note over B: a recycled UID cannot inherit the binding:\nleases re-check the helper ledger generation
+
+== the account is withdrawn ==
+P -> B: account.revoke {account: ivan/claude/personal}
+B -> B: delete the material; state = revoked; every lease → lease_account_revoked
+P -> P: revoke at the vendor (claude.ai for Claude, codex logout for Codex)
+@enduml
