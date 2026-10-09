@@ -18,3 +18,7 @@ A credential broker for agent systems. It runs under its own OS user, holds subs
 - curator-host-helper creates the per-agent OS users the broker identifies.
 - curator-network-profiles names the egress an account may require.
 - curator-trust and waggle define the grant and signature forms the broker verifies.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Authors: Ivan Oparin and Alexey Grigorev.
