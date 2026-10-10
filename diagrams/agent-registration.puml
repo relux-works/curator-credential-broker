@@ -13,7 +13,7 @@ O -> D: start a worker: profile dev, accounts, until end of task
 D -> D: check O may start it; allocate request_id
 D -> H: sudo helper  (stdin: user.create {kind: agent, label: dev-7f3, request_id})
 H -> H: under the helper lock: allocate UID, ledger entry g-0193 (creating → active)
-H --> D: {username: swa-dev-7f3, uid: 30412, generation: g-0193}
+H --> D: {username: worker-dev-7f3, uid: 30412, generation: g-0193}
 D -> D: sign leaf grant: subject agent:g-0193, depth 0,\nnarrowed from its own grant (chain to the root)
 D -> B: bind {uid 30412, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root],\ncaller {chain [caller grant, …, root], intersection}, request_id, expires_at}
 B -> B: peer is a dispatcher principal;\nledger: g-0193 active, kind agent, created by this dispatcher;\nverify both chains, every edge incl. the leaf;\nleaf within the caller intersection; revocation state readable
