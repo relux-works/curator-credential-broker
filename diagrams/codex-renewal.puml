@@ -1,12 +1,13 @@
 @startuml codex-renewal
 !theme plain
-title Codex personal plan: one auth owner refreshes; launches use external tokens and renew within a deadline
+title Slice 1, qualification/adoption pending: Codex personal plan: one auth owner refreshes; launches use external tokens and renew within a deadline
 
 participant "Codex app-server\n(agent OS account, no auth.json)" as A
-participant "Executor\n(client of the app-server)" as E
+participant "Agent-side executor\n(client of this execution's app-server)" as E
 participant "Broker: auth owner\n(broker-owned home + lock)" as O
 
 E -> O: lease.request {harness: codex_cli, channel: external-token, …}
+O -> O: verify lease checks 1–7 (active UID/generation and binding,\nlease + caller chains, current revocations, source/network qualification)
 O -> O: token expires within 48 h? refresh once under the lock
 O --> E: payload {access_token, chatgpt_account_id, plan_type?}
 E -> A: initialize (experimental capability required for external tokens)
@@ -15,10 +16,12 @@ E -> A: account/login/start {type: chatgptAuthTokens, accessToken, chatgptAccoun
 A -> A: model call answers 401
 A -> E: account/chatgptAuthTokens/refresh (answer expected within ~10 s)
 E -> O: lease.renew {lease_id, rejected_sha256} (deadline 8 s)
+O -> O: check lease ownership and repeat checks 1–7
 alt rejected token is still current
   O -> O: refresh once under the lock (N rejected launches → 1 refresh)
 end
-alt renewed within the deadline
+alt renewed within the deadline and authorisation still valid
+  O -> O: after refresh, repeat authorisation under state lock\nimmediately before releasing material
   O --> E: payload {access_token, chatgpt_account_id}
   E -> E: same chatgpt_account_id as the lease?
   E --> A: refresh answer {accessToken, chatgptAccountId}
@@ -28,5 +31,6 @@ else timeout or refusal
   E --> A: error answer (no late reply, no fallback login)
   A -> A: the turn fails
 end
-note over O: the refresh token never leaves the broker's store
+note over O: the refresh token never leaves the broker's store;\nlease_grant_revoked / lease_caller_revoked refuse renewal
+note over E,A: one private app-server per execution; ephemeral storage pinned,\nno broker-mode codex exec and no shared-file/copy fallback
 @enduml

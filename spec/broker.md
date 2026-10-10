@@ -1,8 +1,18 @@
 # swarma-credential-broker: specification
 
-- **Status:** draft v0.3 (2026-10-10). Nothing is implemented.
+- **Status:** draft v0.4 (2026-10-11). Nothing is implemented.
 - **Normative language:** MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 - **Companions:** [swarma-user-manager](https://github.com/relux-works/swarma-user-manager) (per-agent OS users, the launcher that starts processes under them, and per-UID firewall rules), [curator-network-profiles](https://github.com/relux-works/curator-network-profiles) (egress profiles), curator-spec CIP-0010 and CIP-0011 (the Curator side: credential sources, the protected credential binding, the executor capability, the launch-plan extension).
+
+### Revision 0.4
+
+- Aligns the provider/source/channel phases and CIP-0003 disposition with the platform contract table (§5.2), keeps the readable-token exception explicit (§12.1), and records the remaining provider decisions (§18).
+- Names `curator-run` under the agent account as the first broker consumer, with caller-side composition and a narrow, versioned execution mode (D-EXECUTOR, 2026-10-11; §3.1, §16).
+- Separates key classes and the general-grant adapter boundary (§4.3, §6.6), fixes the helper ledger locator (§4.2), and adopts the standalone CLI name (§14).
+- Applies D-WIRE-NAMES (2026-10-11): signed domain tags are `swarma-credential-broker grant/1` and `swarma-credential-broker revocation/1`. Nothing has shipped, so no migration is needed. The body discriminators `grant/1` and `revocation/1` and transport `broker/1` remain distinct from those signing domains.
+- Corrects the existing registration, launch, renewal and revocation sequences; new diagrams remain later work (Appendix B).
+
+These are documentation contracts, not evidence of implementation, supported vendor releases or live qualification. The platform contract table at `relux-works/curator` commit `177cb554` is the baseline; the supplied owner decisions of 2026-10-10/11 override its open choices where explicitly decided.
 
 ### Revision 0.3
 
@@ -49,16 +59,16 @@ The broker is a small service that:
 
 | Term | Meaning |
 |---|---|
-| account | One credential of one person for one harness family, for example a Claude subscription token or a Codex ChatGPT login. Identified by an account id such as `ivan/claude/personal`. |
+| account | One credential of one person for one harness family, for example a Claude subscription token or a Codex ChatGPT login. Identified by an account id such as `owner/claude/personal`. |
 | owner | The person an account belongs to, identified by the OS account that enrolled it (§4.2). |
 | principal | A participant the broker authorises: an operator, a dispatcher, an account owner, or an agent. |
-| generation | The never-reused identifier that swarma-user-manager assigns when it creates an OS account (its ledger, helper §3.4). |
+| generation | The never-reused identifier that swarma-user-manager assigns when it creates an OS account (its ledger, helper §4.5). |
 | grant | A signed statement that a key or an agent generation may lease named accounts for named harnesses and profiles in a time window (§6). |
 | binding | The broker's record that an agent OS account (UID and generation) currently acts as one agent, with the grant chain it uses (§7). |
 | dispatcher | relux-works/swarma-dispatcher, running under its own service account: it asks swarma-user-manager for an OS account, binds it in the broker, and starts processes under it through the helper's launcher. Curator's `agent-user` commands are its clients (CIP-0011). |
 | lease | One authorised use of an account's credential by one binding for one launch (§8). |
 | auth owner | The broker-side component that alone refreshes a rotating account (§9). |
-| executor | The final executor of a launch: the trusted process that runs under the agent's OS account, resolves the protected credential binding, requests the lease and execs the harness. |
+| executor | The final executor of a launch: the trusted process that runs under the agent's OS account, verifies a caller-composed plan and its protected credential binding, requests the lease and starts the harness. The first consumer is `curator-run` (§3.1). |
 
 ## 3. Components
 
@@ -69,9 +79,19 @@ The broker is a small service that:
 | grant store | files owned by the broker user | signed grants and the revocation state (§6.4) |
 | auth owners | inside the daemon, one per rotating account | refresh (§9) |
 | client library (`pkg/client`) | inside executors, dispatchers and the CLI | the socket protocol, delivery of material to a harness, renewal |
-| CLI | the calling person or component | `curator broker …` in Curator, or the standalone `curator-broker` binary (§14) |
+| CLI | the calling person or component | `curator broker …` in Curator, or the standalone `swarma-credential-broker` binary (§14) |
 
 The broker opens no network listener. Its only interface is a Unix-domain socket.
+
+### 3.1 First consumer and execution boundary
+
+Owner decision D-EXECUTOR (2026-10-11) selects **`curator-run` under the agent account** as the first broker consumer and approves a versioned, narrow one-shot amendment to Decision 0021. Curator composes and resolves profiles on the caller's side. Under the agent account, `curator-run` MUST NOT compose or resolve profiles: it verifies and executes the supplied plan, checks the destination-local protected binding (§12.2), opens a fresh broker connection and obtains the lease. This execution mode makes no network calls except to the broker; the harness's traffic follows the launch's network contract (§5.5).
+
+The dedicated entry (such as `curator-run exec --plan-fd N`) is an intended intake shape, not an already published command grammar. R-LR1 owns its versioned launcher/Decision 0021 publication, immutable plan intake and typed refusals. The privileged `swarma-user-launcher` remains a separate binary: it checks the approved executor, passes the plan on FD3 and writes the start receipt before dropping to the agent UID (helper §7). The plan and receipt carry no credential material. The approved design uses one shared launch library with `swarma-session-runner`; a separate minimal executor binary is a later option.
+
+D-PATH fixes the launch-scoped PATH order: (1) the protected tool directory of this launch (CIP-0007), (2) the admitted base PATH of this user in its existing order, (3) one protected manager dispatcher directory that runs project commands only after checks. A repository `.agents/bin` is never executed in a managed launch. The resolved PATH is recorded in the launch plan and covered by its digest; the executor verifies that plan rather than recomposing PATH.
+
+The **board runner and session host do not embed broker clients**. They request execution from `swarma-dispatcher`, which launches through `curator-run`. The board is an optional caller, not a broker or session-host dependency. Later session-runner integration owns the agent-side PTY or per-session app-server transport and lease renewal; the session-host service owns durable session metadata. This does not assert SH2 activation or change the first consumer.
 
 ## 4. Identities and trust
 
@@ -93,15 +113,29 @@ The socket lives in its own directory outside the broker's data tree (§15.2). Q
 
 The broker's configuration (owned by the broker user, §15) names operators and dispatchers. Each principal is recorded as follows:
 
-- **Managed principals** (accounts created by swarma-user-manager: agents, and dispatchers or services that run under helper-created service accounts) are keyed by `(uid, generation)` and are valid only while the helper ledger shows that generation as `active` for that UID. The broker reads the ledger file directly (helper §3.4); a missing, ambiguous, retired, malformed or unreadable entry refuses (`principal_ledger_mismatch`). The check is repeated on bind, lease and renew.
+- **Managed principals** (accounts created by swarma-user-manager: agents, and dispatchers or services that run under helper-created service accounts) are keyed by `(uid, generation)` and are valid only while the helper ledger shows that generation as `active` for that UID. The broker reads the ledger file directly (helper §4.5); a missing, ambiguous, retired, malformed or unreadable entry refuses (`principal_ledger_mismatch`). The check is repeated on bind, lease and renew.
 - **Unmanaged principals** (people's own OS accounts acting as operators or owners) are pinned at configuration by UID plus the account's directory identity (on macOS the account's `GeneratedUID`; on Linux the user name and home path). A change refuses until an operator re-pins the principal (`principal_identity_changed`).
 - Every principal that enrols an account becomes that account's **owner**.
 
-### 4.3 Trust root
+The helper ledger's default locator is **`/opt/swarma/lib/user-manager/ledger.json`** (helper §4.0, §4.5). It is root-owned, mode 0644, in a root-owned directory; the helper publishes it by atomic replacement with file flush, rename and directory flush. It contains one record per generation and no secrets; `user.list` returns those same records. Its readability is not authority. The locator follows the helper's configured installation root when it differs from `/opt/swarma`; the broker MUST use that configured locator, never search an agent home or fall back after a read failure.
+
+### 4.3 Trust root and key classes
 
 Grants are verified against one or more configured **root public keys** (Ed25519). In v0 the root is a local software key of the operator; `curator broker grant …` signs with it. v0 is therefore a local broker authorisation format with a software trust root.
 
+Three key classes have different owners and phases:
+
+| Key class | Custody and role | Phase |
+|---|---|---|
+| Dispatcher caller key (Ed25519) | Generated in the orchestrator agent home; registered by that UID against `(uid, generation)`; signs caller requests to the dispatcher (dispatcher §3.3) | Current dispatcher design; not a keeper identity key |
+| Broker operator software root (Ed25519) | Local operator key; signs the broker's v0 grants and anchors their verification | Broker v0 |
+| Keeper-derived agent identity key | Private key retained inside the keeper, with a root-signed identity certificate and generation-aware identity registration | Architectural target; adapter and activation are later work |
+
+A claim that every agent key stays inside the keeper does not apply to the caller-key or software-root phases. Broker peer identity is still kernel UID plus the active helper generation, not possession of any one of these keys.
+
 A later key keeper (platform architecture §7.2) changes more than the configured root: keeper-derived keys need a root-signed identity certificate, roles need a mapping, old grants need reissue, and revocations must survive. Migration is an explicit procedure: certify or replace keys, map roles, run old and new roots side by side for a transition window, reissue grants and replace bindings under the new root, preserve the revocation state, then retire the old root. The broker gains a versioned verification adapter for the keeper's formats; this specification does not promise that the v0 verifier stays unchanged.
+
+For keeper integration, account retirement and identity revocation remain separate operations (D-IDENTITY). The dispatcher may revoke only identities it registered with the one-shot flag, and only after the account is retired. Standing orchestrator/team identities survive account retirement; only the operator revokes them with a signed record. Neither broker unbind nor helper retirement implicitly revokes every identity. This is a future keeper boundary, not a broker v0 identity API.
 
 ## 5. Accounts
 
@@ -109,7 +143,7 @@ A later key keeper (platform architecture §7.2) changes more than the configure
 
 ```
 account/1
-{ id:           "ivan/claude/personal",       // owner-chosen, unique in the broker
+{ id:           "owner/claude/personal",       // owner-chosen, unique in the broker
   harness:      "claude_code",                // claude_code | codex_cli | muse | gemini | qwen | …
   kind:         "claude-oauth-token",          // §5.2
   owner:        principal reference,           // §4.2
@@ -130,9 +164,40 @@ The record never contains secret material.
 |---|---|---|---|
 | `claude-oauth-token` | the one-year token printed by `claude setup-token` | none: a new token and a restart | environment `CLAUDE_CODE_OAUTH_TOKEN` |
 | `codex-chatgpt` | a Codex ChatGPT login held by the auth owner | the auth owner only (§9) | Codex app-server external tokens only |
-| `codex-access-token` | a Business or Enterprise access token | none in the broker (admin-issued) | environment `CODEX_ACCESS_TOKEN` |
+| `codex-access-token` | a Business or Enterprise access token | none in the broker (admin-issued) | environment `CODEX_ACCESS_TOKEN`; later, outside the first release |
 | `api-key` | a vendor API key (`ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `META_API_KEY`, `GEMINI_API_KEY`, …) | none | environment, or stdin where the harness supports it |
 | `muse-account` | reserved: Muse subscription login | to be researched (§10.2) | reserved |
+
+The following table separates **provider, source, channel and phase**. Source-policy v1/v2 are CIP-0010 policy versions, not broker release numbers. A specified channel remains subject to per-harness executor qualification; no row proves implementation or current vendor support.
+
+| Provider | Source | Channel and launch-home boundary | Phase / disposition |
+|---|---|---|---|
+| All providers | `per-home` native store | Provider-native authentication stays local according to admitted `isolation`; no broker lease implied | Retained lane. Source-policy v1 defaults here when an entry is absent; v2 requires an explicit entry and migrates existing logins to explicit `per-home` |
+| Claude subscription | Explicit node or broker account: enrolled `claude-oauth-token` from `setup-token` | `env`: `CLAUDE_CODE_OAUTH_TOKEN` at harness exec; no launch credential file or native fallback; never combined with `--bare` | First protected broker provider launch, slice 0. No refresh: re-enrol and restart on expiry/auth failure |
+| Codex personal plan | Explicit node/auth owner or broker `codex-chatgpt` account; one refresher per account | `external-token`: access token + account ID to a private per-session app-server; no launch `auth.json`, shared file or copy; no broker-mode `codex exec` | Broker slice 1, after Claude; named supported-release evidence required. Remaining adoption/qualification decision is open (§18.4) |
+| Codex Business/Enterprise | Explicit token node or broker `codex-access-token` | `env`: `CODEX_ACCESS_TOKEN`; no broker refresh or launch `auth.json` | Later lane, excluded from the first release |
+| Claude API | Explicit API-key node/helper/broker source | Provider API-key channel (`ANTHROPIC_API_KEY` for env); Claude `apiKeyHelper` is a separate API-key lane, never subscription login export | Retained helper lane; node/broker delivery requires executor qualification; no automatic substitution for the subscription source |
+| Codex API | Explicit API-key node/helper/broker source | Provider API-key env (`CODEX_API_KEY`); stdin only where the harness supports it | Explicit API-key lane; qualified delivery only, never fallback from a personal-plan lease |
+| Muse API | Explicit API-key node/helper/broker source | `META_API_KEY` env or `exec --api-key-stdin`; no account login in the launch home | Specified API-key lane; actual pass-through/executor admission remains a prerequisite |
+| Gemini / agy / qwen API | Explicit API-key node/helper/broker source | Provider API-key env; stdin only where supported; exact channel admitted per harness | Specified API-key lanes; qualification required, no automatic channel substitution |
+| Muse subscription | Future owned `muse-account` source | Store, refresh and channel reserved for research | Open: prioritize subscription qualification and choose a channel from evidence, or defer (§18.5). API-key support stays separate |
+| Provider proxy injection | Research source / traffic-side injection | No qualified alternate authentication channel defined | Research only; no authentication-equivalence or shipped-route claim (§18.6) |
+
+Source selection is **user-owned**. Node, helper and broker sources require an explicit entry; `isolation` remains the separate native-store sharing axis. An absent entry under source-policy v1 means `per-home`; an unreadable or malformed entry is a failure, not absence and not permission to fall back. Existing homes adopt a new source only through `inspect → plan → apply` with a coordinated marker revision. Explicit token enrolment never authorises native-login copying or export.
+
+CIP-0003 is accepted only in its narrowed CIP-0010 C6 disposition:
+
+| Earlier CIP-0003 clause | Operative disposition |
+|---|---|
+| `per-home` and defaults | Retained; source-policy v1 default, explicit in v2 |
+| `token` with opaque `source_ref` | Node mode with protected binding and executor gates; first store is a 0600 file, not Keychain |
+| `helper` | Retained for API keys |
+| `shared-file` | Replaced by the node. The legacy Linux linked-file path remains historical with unqualified refresh safety, not an endorsed sharing strategy |
+| Configuration precedence, protected-store read order, no fallback, legacy Linux handling and migration | Retained; `credential_source` replaces the earlier `credential_sources` spelling |
+| Refuse token/helper for tracked runs until final-executor lookup | Retained as `credential_injection_unavailable`; lifted per executor only after protected-binding and effective-source/child-inheritance qualification |
+| Decision 0017 Q4 / Q7 | Q4 keyring-per-home claim remains source inspection pending the live probe; Q7 no-copy remains unchanged, with no stripped-copy option |
+
+The superseded default/Keychain recommendations and “no acceptance decision” wording are historical, not competing defaults. Enterprise-token delivery is outside the first release; provider priority and release-specific preconditions that remain undecided are listed in §18.
 
 ### 5.3 Secret store
 
@@ -152,7 +217,7 @@ Material travels over the socket once and is written to the secret store. Enroll
 
 An account MAY require a network profile: `{ profile_ref, profile_digest, assurance }`, using the identifiers of curator-network-profiles.
 
-- **Cooperative (v0).** The executor resolves the launch's network binding with curator-network-profiles as the destination-local process owner and passes the resulting record in the lease request. The broker checks `profile_ref` and `profile_digest` against the account's requirement and records the result as **declared**. The record proves only what the requesting process asserted; network profiles in this version set proxy settings that a process can ignore.
+- **Cooperative (v0).** The caller composes the launch's network profile with curator-network-profiles. The executor verifies its destination-local network binding from that plan without resolving profiles (§3.1) and passes the resulting record in the lease request. The broker checks `profile_ref` and `profile_digest` against the account's requirement and records the result as **declared**. The record proves only what the requesting process asserted; network profiles in this version set proxy settings that a process can ignore.
 - **Enforced (later).** An account that requires `assurance: "enforced"` is refused (`lease_network_enforcement_unavailable`) until swarma-user-manager v1 publishes trusted applied state for the agent's `(uid, generation)`: the profile digest, the proxy listener identity and the firewall generation. The broker then matches leases and renewals against that state, not against the request, and refuses drift.
 
 ### 5.6 One person, one subscription
@@ -173,7 +238,7 @@ grant envelope
     subject:    "ed25519:<…>"           // a delegating key
               | "agent:<generation>",    // a leaf only: one agent account generation (§6.3)
     actions:    ["credential.lease"],
-    accounts:   ["ivan/claude/personal"],   // exact account ids
+    accounts:   ["owner/claude/personal"],   // exact account ids
     harnesses:  ["claude_code"],
     profiles:   ["dev", "review"],          // Curator profiles a lease may serve
     not_before: "2026-10-09T10:00:00Z",
@@ -184,7 +249,7 @@ grant envelope
   sig:  "<base64url, 64 bytes, unpadded>" }
 ```
 
-- The preimage is the domain tag `curator-broker grant/1` followed by a newline and the CCJ-1 canonical bytes of `body`. `id = "sha256:" + lowercase hex of SHA-256(preimage)`; `sig` is the Ed25519 signature of the issuer over the same preimage. Neither `id` nor `sig` is part of the body, so there is no circular preimage.
+- The preimage is the domain tag `swarma-credential-broker grant/1` followed by a newline and the CCJ-1 canonical bytes of `body`. `id = "sha256:" + lowercase hex of SHA-256(preimage)`; `sig` is the Ed25519 signature of the issuer over the same preimage. Neither `id` nor `sig` is part of the body, so there is no circular preimage.
 - A verifier recomputes `id` from `body` and refuses a mismatch (`grant_id_mismatch`).
 - CCJ-1's rejection rules apply: duplicate keys, invalid Unicode, floating-point numbers, integers outside the safe range, negative zero and unknown members refuse (`grant_malformed`). Times are RFC 3339 UTC with a `Z` suffix.
 - The repository publishes canonical byte vectors and negative vectors for every rule.
@@ -199,8 +264,8 @@ A request carries the full chain as envelopes, leaf first. The broker accepts it
 4. The last envelope is the root: `parent` is null and its `issuer` is a configured root key (`grant_root_unknown`).
 5. Narrowing means: actions, accounts, harnesses and profiles are subsets of the parent's; `[not_before, expires_at]` lies within the parent's window; `child.depth < parent.depth`.
 6. Only the leaf may have an `agent:` subject, and a leaf with an `agent:` subject has `depth: 0` and the single action `credential.lease` (`grant_subject_invalid`). The v0 action vocabulary is `credential.lease` and `agent.spawn`; role subjects, wildcards, other actions and other conditions are not part of v0 and refuse (`grant_unsupported`).
-8. A dispatcher's own chain ends at the dispatcher key with depth ≥ 1 and is at most 3 envelopes long, so that an agent leaf fits within the 4-envelope bound; the broker refuses to configure a dispatcher whose chain cannot construct a leaf (`grant_unconstructible`).
-7. No envelope, issuer key or subject key is revoked (§6.4), and the current time is inside every window (`grant_revoked`, `grant_expired`, `grant_not_yet_valid`).
+7. A dispatcher's own chain ends at the dispatcher key with depth ≥ 1 and is at most 3 envelopes long, so that an agent leaf fits within the 4-envelope bound; the broker refuses to configure a dispatcher whose chain cannot construct a leaf (`grant_unconstructible`).
+8. No envelope, issuer key or subject key is revoked (§6.4), and the current time is inside every window (`grant_revoked`, `grant_expired`, `grant_not_yet_valid`).
 
 The verifier's test suite includes a valid chain and mutants that skip each rule, including one that skips only the leaf edge.
 
@@ -210,7 +275,7 @@ An agent is named in a grant by its helper account generation, `agent:<generatio
 
 ### 6.4 Revocation
 
-A revocation is an envelope of the same construction with the domain tag `curator-broker revocation/1`:
+A revocation is an envelope of the same construction with the domain tag `swarma-credential-broker revocation/1`:
 
 ```
 revocation body
@@ -232,7 +297,15 @@ Where grants and revocations live beyond one machine is open: a git journal, a r
 
 ### 6.6 Relation to the trust design
 
-curator-trust (capabilities, delegation verification) and waggle (signed envelopes and keys) define the platform's long-term forms. Broker lease grants are not board capabilities. Reconciliation goes through a versioned adapter or a shared policy layer before 1.0 (§4.3); where the platform forms differ, they win and this format gains a version.
+curator-trust (capabilities, delegation verification) and waggle (signed envelopes and keys) define the platform's long-term forms. The general architectural `grant/1` language includes roles, actions, targets, conditions, human-presence requirements, delegation ceilings and nondelegable rules. It is **not the broker v0 envelope**, despite the shared `grant/1` body discriminator.
+
+| Contract | Scope and verification |
+|---|---|
+| General platform grants | Architectural trust language; broader predicates and identity/certificate model owned by curator-trust/waggle |
+| Broker v0 envelope | Exact accounts/harnesses/profiles/time windows/depth; only `credential.lease` and `agent.spawn`; key subjects or generation-bound agent leaves; §6.1–§6.4 signatures and revocations |
+| Adapter or shared policy layer | Versioned reconciliation before 1.0; must preserve caller binding, narrowing and revocation semantics and explicitly translate or refuse unsupported predicates |
+
+Broker lease grants are not board capabilities. Broker v0 MUST refuse roles, wildcards, human-presence conditions or other unsupported general predicates rather than silently weaken them (§6.2). No adapter is published or implemented here. Where platform forms differ, they take precedence through a versioned adapter or shared policy layer, and the broker format gains a version (§4.3); the v0 verifier is not promised to stay unchanged.
 
 ## 7. Bindings
 
@@ -241,7 +314,7 @@ curator-trust (capabilities, delegation verification) and waggle (signed envelop
 ```
 binding/1
 { binding_id:   random 128-bit identifier, never reused,
-  uid:          612,
+  uid:          30412,
   generation:   "g-0193",                 // helper ledger, §4.2
   label:        "dev-7f3",                // for people; not used for authorisation
   profiles:     ["dev"],
@@ -249,7 +322,7 @@ binding/1
   caller:       { chain: [caller leaf id, …, root id],   // the authorization of whoever asked for the agent
                   intersection: { accounts, harnesses, profiles, not_before, expires_at } },
   created_by:   principal reference of the dispatcher,
-  request_id:   the dispatcher's request id (for reconciliation),
+  request_id:   the dispatcher's bind effect id (receiver idempotency),
   created_at, expires_at,
   state:        "active" | "removed" }
 ```
@@ -261,6 +334,8 @@ binding/1
 - A bind with a `request_id` already used by the same dispatcher returns the existing binding if the arguments are equal and refuses otherwise (`bind_request_conflict`).
 - `unbind` comes from the dispatcher that created the binding or from an operator. It ends the binding's leases and closes the UID's connections. Expired bindings are removed by the broker.
 - A UID with no active binding receives `lease_unbound` for every lease request.
+
+The root caller's `request_id` is correlation for one caller-scoped dispatch request. The broker receives a distinct **bind effect ID** in its `request_id`; create, bind, launch, stop, unbind and retire effects have different IDs and retries reuse the same effect ID. Dispatcher §4.5 owns the derivation: first 32 hexadecimal characters of SHA-256 over `swarma-dispatcher effect/1` followed by CCJ-1 `{caller principal, request_id, record id, component, operation, attempt}` (no added newline). The broker does not equate this key with `binding_id`, account generation, dispatcher `run_id`/`execution_id`, board run/attempt IDs or the correlation-only lease `launch_id`.
 
 ### 7.3 Ephemeral agents
 
@@ -278,7 +353,7 @@ UIDs are recycled when OS accounts are deleted, and labels can repeat. Neither c
 lease.request/1
 { harness:   "claude_code",
   profile:   "dev",                       // the Curator profile of the launch
-  account:   "ivan/claude/personal",      // the account the user-owned configuration names
+  account:   "owner/claude/personal",      // the account the user-owned configuration names
   channel:   "env" | "stdin" | "external-token",
   credential_binding: {                   // CIP-0010 C3.4, resolved by the executor before exec
     digest, harness, profile, account, channel,
@@ -354,10 +429,10 @@ The broker never adopts an existing home, imports another login or exports a key
 
 ### 9.3 External-token mode
 
-- The executor starts `codex app-server`, initialises it with the experimental capability that external-token login requires, and logs in with `account/login/start { type: "chatgptAuthTokens", accessToken, chatgptAccountId }` from the lease payload. A failed initialisation refuses the launch (`external_token_init_failed`).
+- The agent-side executor starts a private `codex app-server` for this execution, initialises it with the experimental capability that external-token login requires, and logs in with `account/login/start { type: "chatgptAuthTokens", accessToken, chatgptAccountId }` from the lease payload. A failed initialisation refuses the launch (`external_token_init_failed`).
 - When the app-server receives a 401 it asks its client with `account/chatgptAuthTokens/refresh`. The executor calls `lease.renew { lease_id, rejected_sha256 }`, verifies that the renewed payload names the same `chatgpt_account_id`, and answers with the new token and account id.
 - The app-server waits only a bounded time for that answer (about ten seconds in the vendor's documentation at the time of writing). The broker answers `lease.renew` within a configured deadline below that bound (default 8 seconds) or returns `renew_timeout`; the executor then answers the app-server with an error and the turn fails. No late or uncorrelated answer is sent, and nothing falls back to another login. Proactive refresh (§9.4) makes a 401-triggered refresh rare; it does not guarantee that every turn continues.
-- The launch home contains no `auth.json`.
+- The launch home contains no `auth.json`; `cli_auth_credentials_store = ephemeral` is pinned. Broker-mode `codex exec`, shared-file logins and stripped copies are not delivery paths.
 
 ### 9.4 Refresh and states
 
@@ -373,7 +448,7 @@ Every consumer of an enrolled Codex account on the machine uses the broker. A pe
 
 ### 9.6 Qualification
 
-The mechanism is measured in relux-works/remote-worker-harness (`internal/authowner`: eight concurrent callers near expiry cause one refresh; five rejected tenants cause one renewal) and was live-accepted on Codex 0.155.1. Codex 0.158 added a fetch of an application network policy; the reference tests run only on 0.155.x. A Codex release is qualified only when the real login, policy fetch, 401 renewal, renewal failure, owner contention and slow renewal pass with the approved executable and configuration; a skipped test is not a pass. Until then the broker refuses `codex-chatgpt` leases for that release (`lease_harness_unqualified`).
+The mechanism is measured in relux-works/remote-worker-harness (`internal/authowner`: eight concurrent callers near expiry cause one refresh; five rejected tenants cause one renewal) and was live-accepted on Codex 0.155.1 in that historical reference. These are pinned historical observations, not fresh qualification by this specification. Codex 0.158 added a fetch of an application network policy; the reference tests run only on 0.155.x. A Codex release is qualified only when the real login, policy fetch, 401 renewal, renewal failure, owner contention and slow renewal pass with the approved executable and configuration; a skipped test is not a pass. Until then the broker refuses `codex-chatgpt` leases for that release (`lease_harness_unqualified`). Historical 0.155.x evidence does not settle the remaining CIP-0010 personal-plan adoption precondition (§18.4).
 
 ## 10. Other harnesses
 
@@ -383,7 +458,7 @@ A `claude-oauth-token` has no refresh. When a harness reports an authentication 
 
 ### 10.2 Muse
 
-A Muse subscription login is required, not only API keys. Its store, refresh behaviour and concurrency are researched in parallel with the first slices; if it rotates like Codex, it gets an auth owner of its own. Until then only `api-key` with `META_API_KEY` is supported for Muse.
+A Muse subscription login is required, not only API keys. Its store, refresh behaviour and concurrency are researched in parallel with the first slices; if it rotates like Codex, it gets an auth owner of its own. Until then only the `api-key` lane with `META_API_KEY` or `exec --api-key-stdin` is specified for Muse, subject to executor qualification. Subscription channel and priority remain open (§18.5).
 
 ## 11. Events
 
@@ -400,13 +475,17 @@ Events carry typed metadata only. Later versions deliver them to the session hos
 
 ### 12.1 What a compromised agent can do
 
-It can read the credential leased to it and copy it within its OS account; this trusted-process posture is a scoped, owner-approved departure from the stronger secret-free agent model of curator-trust. It cannot obtain accounts outside its grants, cannot bind itself, cannot forge its UID, cannot read the broker's store, and cannot refresh a Codex account. A revocation stops new leases; a token already copied lives until it expires or is revoked at the vendor. Stronger non-extraction (injection at an egress proxy, or a credential the process cannot read) is a separate design.
+It can read the credential leased to it and copy it within its OS account; this trusted-process posture is a scoped, owner-approved departure from the stronger secret-free agent model of curator-trust. It cannot obtain accounts outside its grants, cannot bind itself, cannot forge its UID, cannot read the broker's store, and cannot refresh a Codex account. A revocation stops new leases and renewals; a token already copied lives until it expires or is revoked at the vendor. Stronger non-extraction (injection at an egress proxy, or a credential the process cannot read) is a separate design.
 
 ### 12.2 Protected binding and conflicting sources
 
-Broker mode implements CIP-0010's protected credential binding (`credential_binding/1`). The executor, running under the agent's account before exec, resolves the tuple destination-locally: peer identity, profile, harness, account, channel, vendor endpoint, approved executable digest and policy generation. It checks the tuple before requesting the lease and again immediately before exec, and refuses on any change.
+Broker mode implements CIP-0010's protected credential binding (`credential_binding/1`). The executor, running under the agent's account before exec, verifies the caller-composed plan and resolves the protected tuple destination-locally without composing or resolving profiles (§3.1): peer identity, profile, harness, account, channel, vendor endpoint, approved executable digest and policy generation. It checks the tuple before requesting the lease and again immediately before exec, and refuses on any change.
+
+The required plan extension `works.relux.curator.credential/1` carries metadata only, never material. `credential-injection/1` is an admission gate, not authority supplied by an executor claim: the protected binding, current grant chains and qualified executable must all match. Destination binding checks do not grant new source-selection authority to the agent. An unqualified executor refuses `credential_injection_unavailable`.
 
 The executor MUST refuse to exec when the inherited environment, a harness settings or configuration file the launch would read, a native credential store selector, or a configured helper already supplies a credential for the same harness (`credential_source_conflict`). It never replaces a conflicting source silently.
+
+Enrolment time is not token issue time: when `issued_at` is absent, `expires_at: null` means unknown (§5.1); status MUST preserve that uncertainty and cannot emit expiry events from an invented mint date. Errors keep the typed `unknown` class when auth, permission and quota failures cannot be distinguished (§11).
 
 Only an executor whose harness tuple has been qualified to keep the credential out of child processes it does not control (MCP servers, hooks, tool subprocesses), and to use the leased source as the effective source, may declare `credential-injection/1`. A clean environment at exec does not by itself control what a harness passes to its children, so this is part of each harness release's qualification.
 
@@ -444,13 +523,17 @@ Every refusal is a typed error `{ code, message, details }`; codes are listed in
 
 ## 14. Command line
 
-The same operations are available as `curator-broker <verb>` and, through Curator's provider mechanism, as `curator broker <verb>`:
+The standalone binary is **`swarma-credential-broker <verb>`**; through Curator's provider mechanism the same operations are available as `curator broker <verb>`. Repository, binary and service-account naming agree. `curator-broker` was the earlier design spelling, not a shipped compatibility alias. Nothing has shipped, so no CLI or signed-data migration is required.
+
+D-WIRE-NAMES explicitly replaces the earlier signing domains with `swarma-credential-broker grant/1` and `swarma-credential-broker revocation/1` (§6.1, §6.4). This is the owner-approved pre-release wire decision, separate from CLI naming. The peer-authenticated `broker/1` transport defines no broker request-signature domain (§13).
+
+Examples:
 
 ```
-curator broker enrol claude_code --account ivan/claude/personal --token-stdin [--issued-at 2026-10-09]
-curator broker enrol codex_cli   --account ivan/codex/personal
+curator broker enrol claude_code --account owner/claude/personal --token-stdin [--issued-at 2026-10-09]
+curator broker enrol codex_cli   --account owner/codex/personal
 curator broker accounts
-curator broker grant --to-key <dispatcher key> --account ivan/claude/personal --profile dev --harness claude_code --depth 1 --until 2026-10-10T00:00Z
+curator broker grant --to-key <dispatcher key> --account owner/claude/personal --profile dev --harness claude_code --depth 1 --until 2026-10-10T00:00Z
 curator broker revoke <grant id | key>
 curator broker bindings
 curator broker status
@@ -479,7 +562,7 @@ Uninstall stops the service, ends leases and bindings, and leaves the store unle
 ## 16. Delivery order
 
 1. **Formats.** `grant/1`, `revocation/1` and the `broker/1` frames are frozen with canonical and negative vectors; the verifier ships with its mutant suite (§6.2).
-2. **Slice 0: one protected Claude launch.** swarma-user-manager v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in Curator's first executor (CIP-0011). Acceptance on hosted runners only, through swarma-dispatcher v0 and `curator agent-user` with the deployed sudoers rules: the dispatcher creates an agent account, binds it with the caller's authorization and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
+2. **Slice 0: one protected Claude launch.** swarma-user-manager v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in `curator-run` under the agent account (§3.1, D-EXECUTOR). The board runner and session host call the dispatcher rather than embedding a broker client. Acceptance on hosted runners only, through swarma-dispatcher v0 and `curator agent-user` with the deployed sudoers rules: the dispatcher creates an agent account, binds it with the caller's authorization and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
 3. **Slice 1: Codex.** The enrolment ceremony, the auth owner, external tokens with renewal and deadlines, and qualification on the supported Codex release (§9.6).
 4. **Slice 2: enforced networking.** Helper v1 firewall rules and trusted applied state; accounts that require enforced profiles become serviceable (§5.5).
 
@@ -494,13 +577,18 @@ Uninstall stops the service, ends leases and bindings, and leaves the store unle
 
 ## 18. Open questions
 
+Only the following broker/provider choices remain open here. D-EXECUTOR resolves the launcher amendment direction and first consumer; D-WIRE-NAMES resolves the signing domains. Publication of the narrow executor intake remains R-LR1 work, not a new consumer-choice question.
+
 1. Registry for grants and revocations beyond the local state (§6.5).
 2. Whether Claude tokens should also be issued per launch by an owner once vendors offer short-lived subscription tokens.
 3. Ownership of one Codex vendor account across several machines (§9.5).
+4. **OWNER DECISION NEEDED — Codex personal-plan adoption/qualification (contract C4, CIP-0010 open question 2).** Options: adopt the single auth owner and external-token lane with named supported-release evidence (including the proposed 0.159.0 race-test precondition), or defer that provider lane. The broker slice-1 design and historical 0.155.x reference do not decide the current supported release or satisfy that precondition.
+5. **OWNER DECISION NEEDED — Muse subscription channel and priority (contract C7).** Options: prioritize subscription qualification and choose a supported channel from measured store/refresh evidence, or defer subscription support while retaining the separately qualified API-key lane. No subscription channel, refresh owner or parity claim is invented.
+6. **Open research — provider proxy injection (audit A10.6).** Options: continue separate provider/channel qualification research, or defer traffic-side injection and retain the explicit harness-readable delivery model. No proxy path is an admitted substitute for native or broker authentication.
 
 ## Appendix A. Refusal codes
 
-`peer_identity_unavailable`, `server_identity_mismatch`, `principal_ledger_mismatch`, `principal_identity_changed`, `role_not_permitted`, `frame_too_large`, `version_unsupported`, `request_deadline_exceeded`, `account_exists`, `account_unknown`, `account_duplicate`, `account_store_keyring_refused`, `enrol_material_invalid`, `grant_malformed`, `grant_id_mismatch`, `grant_signature_invalid`, `grant_chain_malformed`, `grant_chain_broken`, `grant_not_narrowing`, `grant_root_unknown`, `grant_subject_invalid`, `grant_unsupported`, `grant_revoked`, `grant_expired`, `grant_not_yet_valid`, `revocation_not_authorised`, `revocation_state_unavailable`, `bind_not_dispatcher`, `bind_target_invalid`, `bind_request_conflict`, `lease_unbound`, `lease_not_authorised`, `lease_account_unknown`, `lease_harness_mismatch`, `lease_account_revoked`, `lease_reauth_required`, `lease_owner_unavailable`, `lease_channel_unsupported`, `lease_harness_unqualified`, `lease_binding_mismatch`, `lease_network_mismatch`, `lease_network_enforcement_unavailable`, `lease_not_owner`, `lease_not_active`, `lease_caller_revoked`, `grant_unconstructible`, `renew_not_current`, `renew_timeout`, `renew_failed`, `external_token_init_failed`, `credential_source_conflict`.
+`peer_identity_unavailable`, `server_identity_mismatch`, `principal_ledger_mismatch`, `principal_identity_changed`, `role_not_permitted`, `frame_too_large`, `version_unsupported`, `request_deadline_exceeded`, `account_exists`, `account_unknown`, `account_duplicate`, `account_store_keyring_refused`, `enrol_material_invalid`, `grant_malformed`, `grant_id_mismatch`, `grant_signature_invalid`, `grant_chain_malformed`, `grant_chain_broken`, `grant_not_narrowing`, `grant_root_unknown`, `grant_subject_invalid`, `grant_unsupported`, `grant_revoked`, `grant_expired`, `grant_not_yet_valid`, `revocation_not_authorised`, `revocation_state_unavailable`, `bind_not_dispatcher`, `bind_target_invalid`, `bind_request_conflict`, `lease_unbound`, `lease_grant_revoked`, `lease_not_authorised`, `lease_account_unknown`, `lease_harness_mismatch`, `lease_account_revoked`, `lease_reauth_required`, `lease_owner_unavailable`, `lease_channel_unsupported`, `lease_harness_unqualified`, `lease_binding_mismatch`, `lease_network_mismatch`, `lease_network_enforcement_unavailable`, `lease_not_owner`, `lease_not_active`, `lease_caller_revoked`, `grant_unconstructible`, `renew_not_current`, `renew_timeout`, `renew_failed`, `external_token_init_failed`, `credential_source_conflict`, `credential_injection_unavailable`.
 
 ## Appendix B. Diagrams
 

@@ -1,16 +1,14 @@
 @startuml lease-at-launch
 !theme plain
-title A launch receives a lease: the executor resolves the protected binding; material goes only into the harness it starts
+title Slice 0: curator-run verifies the caller-composed plan and protected binding, leases and starts Claude
 
-participant "Executor\n(agent OS account, uid 30412)" as E
-participant "curator-network-profiles\n(resolve, destination-local)" as N
+participant "curator-run\n(agent OS account, uid 30412)" as E
 participant "Broker" as B
 participant "Harness\n(Claude Code)" as H
 
-E -> E: resolve credential_binding/1 (CIP-0010 C3.4):\nprofile, harness, account, channel, endpoint,\nexecutable digest, policy generation
+E -> E: verify caller-composed plan; no profile resolution\nresolve protected credential_binding/1 (CIP-0010 C3.4):\nprofile, harness, account, channel, endpoint,\nexecutable digest, policy generation
 E -> E: refuse if another credential source is present\n(credential_source_conflict)
-E -> N: resolve the network profile for Curator profile dev
-N --> E: record {profile_ref, profile_digest, assurance: cooperative}
+E -> E: verify destination-local network binding from composed plan\nrecord {profile_ref, profile_digest, assurance: cooperative}
 E -> B: connect; check the server's peer UID is the broker's
 E -> B: lease.request {harness, profile, account, channel: env,\ncredential_binding, network, launch_id}
 B -> B: under the state lock:\n1 peer = agent principal of an active binding (ledger g-0193 active)\n2 lease chain and caller chain verify against the current revocation state\n3 leaf covers account, harness, profile; profile in binding\n4 account active, harness matches\n5 channel valid; harness release qualified\n6 binding fields match; endpoint and executable approved\n7 network: cooperative match recorded as declared
@@ -24,4 +22,5 @@ else all checks pass
   H --> E: exit
   E -> B: lease.release {lease_id} (idempotent)
 end
+note over E,H: Readable-token exception: Claude can read/copy its own token.\ncredential-injection/1 requires effective-source and child-inheritance qualification;\nthis sequence is a design contract, not qualification evidence.
 @enduml

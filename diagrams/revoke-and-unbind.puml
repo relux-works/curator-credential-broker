@@ -3,27 +3,28 @@
 title Ending access: grant revocation, task end, account withdrawal
 
 actor "Person / operator" as P
-participant "Dispatcher" as D
+participant "swarma-dispatcher" as D
 participant "swarma-user-manager" as H
-participant "Broker" as B
+participant "swarma-credential-broker" as B
 
 == a grant is revoked ==
-P -> B: revocation.put {revokes: grant id, by, sig}
-B -> B: under the state lock: write the new revocation state\n(temp file, flush, rename, flush directory), update memory
+P -> B: revocation.put (signed revocation envelope, §6.4)
+B -> B: verify swarma-credential-broker revocation/1 signature\nunder the state lock: write the new revocation state\n(temp file, flush, rename, flush directory), update memory
 B --> P: acknowledged (only after the state is durable)
-B -> B: the next lease or renewal under that chain → grant_revoked
+B -> B: next lease/renewal: lease_grant_revoked for the lease chain,\nlease_caller_revoked for the caller chain (method-specific refusals)
 
 == the task ends ==
 D -> B: unbind {binding_id}
 B -> B: end the binding's leases; close uid 30412's connections
-D -> H: helper-op/1 {op: user.retire, generation: g-0193}
+D -> H: user.retire {generation: g-0193, home: archive}\n(abbreviated helper request; distinct retire effect ID)
 H -> H: state retiring: launcher refuses g-0193;\nstop processes, verify quiescence; (v1: egress stays denied)
 H -> H: quarantine and archive or delete the home;\nremove account and group; state removed
 H --> D: removed
+note over D,H: Future keeper integration (D-IDENTITY): after retirement,\ndispatcher separately revokes only identities registered as one-shot.\nStanding identities require a signed operator revocation;\nunbind/retire are not blanket identity revocation.
 note over B: a recycled UID or a repeated label inherits nothing:\nbindings, grants and leases are keyed by generation
 
 == the account is withdrawn ==
-P -> B: account.revoke {account: ivan/claude/personal}
+P -> B: account.revoke {account: owner/claude/personal}
 B -> B: delete the material; state revoked; every lease → lease_account_revoked
-P -> P: revoke at the vendor (claude.ai for Claude, codex logout for Codex);\ntokens already copied end only there or at expiry
+P -> P: revoke at the vendor (Claude UI or Codex auth-owner logout);\ntokens already copied end only there or at expiry
 @enduml

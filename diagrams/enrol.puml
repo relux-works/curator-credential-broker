@@ -12,7 +12,7 @@ database "Secret store\n(0600 files, broker user)" as S
 == Claude subscription ==
 P -> V: claude setup-token (browser login)
 V --> P: one-year token (printed, not stored)
-P -> C: curator broker enrol claude_code --account ivan/claude/personal --token-stdin [--issued-at]
+P -> C: curator broker enrol claude_code --account owner/claude/personal --token-stdin [--issued-at]
 C -> B: connect; check the server's peer UID is the broker's
 C -> B: hello; account.enrol {kind: claude-oauth-token, material}
 B -> B: peer principal from the kernel (pinned owner)
@@ -20,7 +20,7 @@ B -> S: put(material) (atomic replace)
 B --> C: account/1 {state: active, expires_at: computed | null}
 
 == Codex personal plan: enrolment ceremony ==
-P -> C: curator broker enrol codex_cli --account ivan/codex/personal
+P -> C: curator broker enrol codex_cli --account owner/codex/personal
 C -> B: account.enrol {kind: codex-chatgpt}
 B -> B: create a fresh Codex home in the broker store\n(file credential storage, sanitised environment)
 B -> X: start the vendor's device login in that home

@@ -1,27 +1,32 @@
 @startuml agent-registration
 !theme plain
-title Registering and starting an agent: OS account, binding with an agent-generation grant, start through the launcher
+title First consumer: caller-composed plan, account, broker binding, curator-run under the agent UID
 
 participant "Orchestrator" as O
 participant "swarma-dispatcher\n(service account swarma-dispatcher)" as D
 participant "swarma-user-manager\n(root, closed op schema)" as H
 participant "Broker" as B
 participant "swarma-user-launcher\n(root, closed launch schema)" as L
-participant "Executor\n(agent OS account)" as E
+participant "curator-run\n(agent OS account, narrow one-shot mode)" as E
 
-O -> D: start a worker: profile dev, accounts, until end of task
-D -> D: check O may start it; allocate request_id
-D -> H: sudo helper  (stdin: user.create {kind: agent, label: dev-7f3, request_id})
+O -> O: compose and resolve profiles; protected credential metadata only\n(no token in plan); record resolved launch PATH in plan digest
+O -> D: start a worker: immutable plan, accounts, until end of task
+D -> D: check O may start it; retain root request_id; derive distinct create/bind/launch effect IDs
+D -> H: sudo swarma-user-manager (no arguments)\nstdin: user.create {kind: agent, label: dev-7f3}, create effect ID
 H -> H: under the helper lock: allocate UID, ledger entry g-0193 (creating → active)
 H --> D: {username: worker-dev-7f3, uid: 30412, generation: g-0193}
 D -> D: sign leaf grant: subject agent:g-0193, depth 0,\nnarrowed from its own grant (chain to the root)
-D -> B: bind {uid 30412, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root],\ncaller {chain [caller grant, …, root], intersection}, request_id, expires_at}
-B -> B: peer is a dispatcher principal;\nledger: g-0193 active, kind agent, created by this dispatcher;\nverify both chains, every edge incl. the leaf;\nleaf within the caller intersection; revocation state readable
+D -> B: bind {uid 30412, generation g-0193, label, profiles [dev],\nchain [leaf, dispatcher grant, root],\ncaller {chain [caller grant, …, root], intersection}, request_id: bind effect ID, expires_at}
+B -> B: peer is a dispatcher principal;\nroot-owned ledger.json (helper §4.5):\ng-0193 active, kind agent, created by this dispatcher;\nverify both chains, every edge incl. the leaf;\nleaf within the caller intersection; revocation state readable
 B --> D: binding/1 {binding_id}
 D -> D: close the broker connection
-D -> L: sudo launcher  (stdin: launch.start {generation g-0193, executor, plan, request_id})
-L -> L: ledger: g-0193 active; executor digest approved;\nclose inherited descriptors; clear groups; drop to uid 30412
-L -> E: exec the executor as uid 30412 (sanitised environment)
+D -> L: sudo swarma-user-launcher (no arguments)\nstdin: launch.start {generation: g-0193, execution_id, epoch,\nexecutor: curator-run, plan: base64, request_id: launch effect ID}
+L -> L: ledger: g-0193 active; executor digest approved;\nclose inherited descriptors; plan on FD3; sanitise environment;\nwrite atomic start receipt before clearing groups and dropping to uid 30412
+L -> E: exec approved curator-run as uid 30412 (plan on FD3)
+E -> E: verify and execute caller-composed plan;\nno composition or profile resolution; no network except broker
 E -> B: fresh connection (lease flow: lease-at-launch)
-D --> O: run handle (pid, generation, binding_id)
+D --> O: execution handle (run_id, execution_id, generation, binding_id)
+note over D,L: Privileged payloads are abbreviated, not copyable schemas.\nHelper §7 owns execution_id/epoch/FD3/start-receipt rules.
+note over O: D-PATH: protected launch tools → admitted base PATH → protected manager dispatcher.\nNo repository .agents/bin executes in a managed launch.
+note over E: Narrow executor intake is an approved versioned target (D-EXECUTOR);\nR-LR1 publishes its command/plan contract. Board runner and host call dispatcher.
 @enduml
