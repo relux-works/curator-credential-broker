@@ -4,7 +4,7 @@ title Ending access: grant revocation, task end, account withdrawal
 
 actor "Person / operator" as P
 participant "Dispatcher" as D
-participant "curator-host-helper" as H
+participant "swarma-user-manager" as H
 participant "Broker" as B
 
 == a grant is revoked ==

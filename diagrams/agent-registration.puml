@@ -3,10 +3,10 @@
 title Registering and starting an agent: OS account, binding with an agent-generation grant, start through the launcher
 
 participant "Orchestrator" as O
-participant "curator-dispatcher\n(service account swarma-dispatch)" as D
-participant "curator-host-helper\n(root, closed op schema)" as H
+participant "swarma-dispatcher\n(service account swarma-dispatcher)" as D
+participant "swarma-user-manager\n(root, closed op schema)" as H
 participant "Broker" as B
-participant "curator-host-launcher\n(root, closed launch schema)" as L
+participant "swarma-user-launcher\n(root, closed launch schema)" as L
 participant "Executor\n(agent OS account)" as E
 
 O -> D: start a worker: profile dev, accounts, until end of task

@@ -1,14 +1,14 @@
-# curator-credential-broker: specification
+# swarma-credential-broker: specification
 
 - **Status:** draft v0.3 (2026-10-10). Nothing is implemented.
 - **Normative language:** MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
-- **Companions:** [curator-host-helper](https://github.com/relux-works/curator-host-helper) (per-agent OS users, the launcher that starts processes under them, and per-UID firewall rules), [curator-network-profiles](https://github.com/relux-works/curator-network-profiles) (egress profiles), curator-spec CIP-0010 and CIP-0011 (the Curator side: credential sources, the protected credential binding, the executor capability, the launch-plan extension).
+- **Companions:** [swarma-user-manager](https://github.com/relux-works/swarma-user-manager) (per-agent OS users, the launcher that starts processes under them, and per-UID firewall rules), [curator-network-profiles](https://github.com/relux-works/curator-network-profiles) (egress profiles), curator-spec CIP-0010 and CIP-0011 (the Curator side: credential sources, the protected credential binding, the executor capability, the launch-plan extension).
 
 ### Revision 0.3
 
 - A binding carries the **caller's authorization** as a dependency: the chain of the caller who asked the dispatcher for the agent, and the exact intersection granted. The broker verifies it at bind and on every lease and renewal, so revoking a caller cuts its agents at once (owner decision 2026-10-10; dispatcher review F2) (§7.1, §8.2).
 - The action vocabulary is frozen for v0 (`credential.lease`, `agent.spawn`), and the dispatcher's chain has a constructible shape (§6.2).
-- Paths and names follow the platform root `/opt/swarma` and the service account `swarma-broker`; the dispatcher is relux-works/curator-dispatcher (§15, §16).
+- Paths and names follow the platform root `/opt/swarma` and the service account `swarma-credential-broker`; the dispatcher is relux-works/swarma-dispatcher (§15, §16).
 
 ### Revision 0.2
 
@@ -40,7 +40,7 @@ The broker is a small service that:
 ### 1.1 Non-goals
 
 - The broker does not run harnesses, compose launch plans or manage homes (Curator does).
-- It does not create OS users or start processes under them (curator-host-helper does) and does not decide who may start an agent (the dispatcher does).
+- It does not create OS users or start processes under them (swarma-user-manager does) and does not decide who may start an agent (the dispatcher does).
 - It does not authenticate to model vendors on its own behalf, bypass a vendor's login flow, or intercept model traffic. Enrolment always uses the vendor's own flow, completed by a person.
 - It does not make a credential non-extractable. A credential delivered into a harness process is readable by that process (§12.1).
 - It does not multiply one person's subscription across people. One account belongs to one person.
@@ -52,10 +52,10 @@ The broker is a small service that:
 | account | One credential of one person for one harness family, for example a Claude subscription token or a Codex ChatGPT login. Identified by an account id such as `ivan/claude/personal`. |
 | owner | The person an account belongs to, identified by the OS account that enrolled it (§4.2). |
 | principal | A participant the broker authorises: an operator, a dispatcher, an account owner, or an agent. |
-| generation | The never-reused identifier that curator-host-helper assigns when it creates an OS account (its ledger, helper §3.4). |
+| generation | The never-reused identifier that swarma-user-manager assigns when it creates an OS account (its ledger, helper §3.4). |
 | grant | A signed statement that a key or an agent generation may lease named accounts for named harnesses and profiles in a time window (§6). |
 | binding | The broker's record that an agent OS account (UID and generation) currently acts as one agent, with the grant chain it uses (§7). |
-| dispatcher | relux-works/curator-dispatcher, running under its own service account: it asks curator-host-helper for an OS account, binds it in the broker, and starts processes under it through the helper's launcher. Curator's `agent-user` commands are its clients (CIP-0011). |
+| dispatcher | relux-works/swarma-dispatcher, running under its own service account: it asks swarma-user-manager for an OS account, binds it in the broker, and starts processes under it through the helper's launcher. Curator's `agent-user` commands are its clients (CIP-0011). |
 | lease | One authorised use of an account's credential by one binding for one launch (§8). |
 | auth owner | The broker-side component that alone refreshes a rotating account (§9). |
 | executor | The final executor of a launch: the trusted process that runs under the agent's OS account, resolves the protected credential binding, requests the lease and execs the harness. |
@@ -64,7 +64,7 @@ The broker is a small service that:
 
 | Component | Runs as | Job |
 |---|---|---|
-| broker daemon | its own unprivileged service user (`swarma-broker` by default) | listens on the broker socket; keeps accounts, grants, revocations, bindings and leases; runs auth owners; writes the audit log |
+| broker daemon | its own unprivileged service user (`swarma-credential-broker` by default) | listens on the broker socket; keeps accounts, grants, revocations, bindings and leases; runs auth owners; writes the audit log |
 | account store | files owned by the broker user | account records and their secret material (§5.3) |
 | grant store | files owned by the broker user | signed grants and the revocation state (§6.4) |
 | auth owners | inside the daemon, one per rotating account | refresh (§9) |
@@ -93,7 +93,7 @@ The socket lives in its own directory outside the broker's data tree (§15.2). Q
 
 The broker's configuration (owned by the broker user, §15) names operators and dispatchers. Each principal is recorded as follows:
 
-- **Managed principals** (accounts created by curator-host-helper: agents, and dispatchers or services that run under helper-created service accounts) are keyed by `(uid, generation)` and are valid only while the helper ledger shows that generation as `active` for that UID. The broker reads the ledger file directly (helper §3.4); a missing, ambiguous, retired, malformed or unreadable entry refuses (`principal_ledger_mismatch`). The check is repeated on bind, lease and renew.
+- **Managed principals** (accounts created by swarma-user-manager: agents, and dispatchers or services that run under helper-created service accounts) are keyed by `(uid, generation)` and are valid only while the helper ledger shows that generation as `active` for that UID. The broker reads the ledger file directly (helper §3.4); a missing, ambiguous, retired, malformed or unreadable entry refuses (`principal_ledger_mismatch`). The check is repeated on bind, lease and renew.
 - **Unmanaged principals** (people's own OS accounts acting as operators or owners) are pinned at configuration by UID plus the account's directory identity (on macOS the account's `GeneratedUID`; on Linux the user name and home path). A change refuses until an operator re-pins the principal (`principal_identity_changed`).
 - Every principal that enrols an account becomes that account's **owner**.
 
@@ -153,7 +153,7 @@ Material travels over the socket once and is written to the secret store. Enroll
 An account MAY require a network profile: `{ profile_ref, profile_digest, assurance }`, using the identifiers of curator-network-profiles.
 
 - **Cooperative (v0).** The executor resolves the launch's network binding with curator-network-profiles as the destination-local process owner and passes the resulting record in the lease request. The broker checks `profile_ref` and `profile_digest` against the account's requirement and records the result as **declared**. The record proves only what the requesting process asserted; network profiles in this version set proxy settings that a process can ignore.
-- **Enforced (later).** An account that requires `assurance: "enforced"` is refused (`lease_network_enforcement_unavailable`) until curator-host-helper v1 publishes trusted applied state for the agent's `(uid, generation)`: the profile digest, the proxy listener identity and the firewall generation. The broker then matches leases and renewals against that state, not against the request, and refuses drift.
+- **Enforced (later).** An account that requires `assurance: "enforced"` is refused (`lease_network_enforcement_unavailable`) until swarma-user-manager v1 publishes trusted applied state for the agent's `(uid, generation)`: the profile digest, the proxy listener identity and the firewall generation. The broker then matches leases and renewals against that state, not against the request, and refuses drift.
 
 ### 5.6 One person, one subscription
 
@@ -462,14 +462,14 @@ Agent leaves (`agent:<generation>`) are issued by the dispatcher when it binds a
 
 ### 15.1 Service user
 
-The broker runs as the dedicated unprivileged service user `swarma-broker`, created by curator-host-helper (`user.create { kind: "service" }` from the installer principal); its home is `/opt/swarma/services/swarma-broker`. The platform installer installs the binary, the service user and the service unit together.
+The broker runs as the dedicated unprivileged service user `swarma-credential-broker`, created by swarma-user-manager (`user.create { kind: "service" }` from the installer principal); its home is `/opt/swarma/services/swarma-credential-broker`. The platform installer installs the binary, the service user and the service unit together.
 
 ### 15.2 Paths
 
 | What | macOS | Linux |
 |---|---|---|
 | data (store, grants, revocations, leases, config, audit) | the service user's home, 0700 | the service user's home, 0700 |
-| socket | `/opt/swarma/run/broker/`, owned by the broker user, mode 0755, every ancestor root-owned and not writable by others; socket mode 0666 (authorisation is by peer principal, §4) | same |
+| socket | `/opt/swarma/run/credential-broker/`, owned by the broker user, mode 0755, every ancestor root-owned and not writable by others; socket mode 0666 (authorisation is by peer principal, §4) | same |
 | service | a LaunchDaemon with `UserName` set to the broker user | a systemd system unit with `User=` |
 
 ### 15.3 Removal
@@ -479,7 +479,7 @@ Uninstall stops the service, ends leases and bindings, and leaves the store unle
 ## 16. Delivery order
 
 1. **Formats.** `grant/1`, `revocation/1` and the `broker/1` frames are frozen with canonical and negative vectors; the verifier ships with its mutant suite (§6.2).
-2. **Slice 0: one protected Claude launch.** curator-host-helper v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in Curator's first executor (CIP-0011). Acceptance on hosted runners only, through curator-dispatcher v0 and `curator agent-user` with the deployed sudoers rules: the dispatcher creates an agent account, binds it with the caller's authorization and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
+2. **Slice 0: one protected Claude launch.** swarma-user-manager v0 and its launcher; the broker daemon with the file store, local grants and revocation state, bind and unbind, lease request and release, the `env` channel, the protected binding and conflict refusal, the audit log; the broker client in Curator's first executor (CIP-0011). Acceptance on hosted runners only, through swarma-dispatcher v0 and `curator agent-user` with the deployed sudoers rules: the dispatcher creates an agent account, binds it with the caller's authorization and starts the executor under it through the launcher; the executor receives a lease and runs Claude; typed refusals for another UID, a retired generation, another account, another profile, an expired grant, a revoked grant, a revocation state that cannot be read, a conflicting source and an unqualified harness; the token appears in no file, argv, log or child process the qualification covers.
 3. **Slice 1: Codex.** The enrolment ceremony, the auth owner, external tokens with renewal and deadlines, and qualification on the supported Codex release (§9.6).
 4. **Slice 2: enforced networking.** Helper v1 firewall rules and trusted applied state; accounts that require enforced profiles become serviceable (§5.5).
 

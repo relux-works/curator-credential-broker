@@ -1,4 +1,4 @@
-# curator-credential-broker
+# swarma-credential-broker
 
 A credential broker for agent systems. It runs under its own OS user, holds subscription and API credentials in its own store, and leases them to authorised agent launches over a Unix socket whose peer it identifies through the kernel (`getpeereid` / `SO_PEERCRED`).
 
@@ -15,7 +15,7 @@ A credential broker for agent systems. It runs under its own OS user, holds subs
 ## How it fits
 
 - Curator composes launches and asks the broker for a lease at the final executor (curator-spec CIP-0010, CIP-0011).
-- curator-host-helper creates the per-agent OS users the broker identifies.
+- swarma-user-manager creates the per-agent OS users the broker identifies.
 - curator-network-profiles names the egress an account may require.
 - curator-trust and waggle define the grant and signature forms the broker verifies.
 
